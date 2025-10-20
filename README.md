@@ -1,3 +1,7 @@
+## Model Checkpoints Available at Huggingface!
+
+**Checkpoints**: https://huggingface.co/JitaiHao/Uni-7B
+
 ## 📂 Project Structure
 
 ```
