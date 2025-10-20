@@ -24,33 +24,67 @@
 
 ## ⚙️ Setup and Installation
 
-1.  Clone this repository:
+Install the required training dependencies:
 
-    ```bash
-    git clone ...
-    cd ...
-    ```
+```bash
+conda create -n uni python=3.10 -y
+conda activate uni
 
-2.  Install the required dependencies:
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121 --resume-retries 10
+pip install torch==2.5.1 transformers[torch]==4.53.3 accelerate deepspeed==0.15.4 torchvision datasets==3.6.0
+pip install transformers==4.53.3 fire matplotlib seaborn wandb loguru
+MAX_JOBS=8 pip install flash-attn==2.7.4.post1 --no-build-isolation
+```
 
-    ```bash
-    conda create -n uni python=3.10 -y
-    conda activate uni
+For dpg eval:
+```bash
+conda create -n dpg --clone uni -y
+conda activate dpg
+pip install -r dpg_requirements.txt
+```
 
-    pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121 --resume-retries 10
-    pip install torch==2.5.1 transformers[torch]==4.53.3 accelerate deepspeed==0.15.4 torchvision datasets==3.6.0
-    pip install transformers==4.53.3 fire matplotlib seaborn wandb loguru
-    MAX_JOBS=8 pip install flash-attn==2.7.4.post1 --no-build-isolation
-    ```
+For text eval:
+```bash
+conda create -n lm_eval --clone uni -y
+conda activate lm_eval
+pip install lm_eval==0.4.9
+```
+
+For vis understanding eval:
+```bash
+conda activate dpg
+pip install uvicorn fastapi 
+```
+
+## Data Composition
+
+**PT (Pre-Training)**:  
+- Understanding: `minigemini`, `finevision`, `blip3o-pretrain`  
+- Generation: Internal data, `journeydb`, `imagenet`, `cc12m`, `laion`  
+- Text: `CCI3-HQ`, `DCLM`, `STARCODER`  
+
+**SFT (Supervised Fine-Tuning)**:  
+- Models: `minigemini`, `finevision`, `blip3o-60k`, `sharegpt4o`, `openorca`  
+- Total dataset size: 240B tokens, including approximately 117B VQ (image) tokens  
+
+---
 
 ## 📦 Data Preparation
 
-The model requires image data to be preprocessed into VQGAN tokens.
+The model requires image data to be preprocessed into VQ tokens. The VQGAN tokenizer we are utilizing is from the [Chameleon repository](https://github.com/facebookresearch/chameleon). Once downloaded, ensure the files are placed in the directory `data_process/vqgan` and named `vqgan.yaml` and `vqgan.ckpt`.
 
-1.  **Image Encoding**: Use scripts like `data_process/encode_vq_finevision.py` or `data_process/convert_imagepair_cc512_batch_version.py` to convert your image-text pair data into VQGAN encodings. These scripts will transform images into discrete token sequences and pair them with their corresponding text.
+Images will be encoded into **32 x 32 = 1024 VQ tokens**.
 
-2.  **Data Format**: Ensure the final training data is in `jsonl` format, where each line contains text, VQGAN codes, and other metadata. For details on the format, please refer to the logic in `uni_arch/train/data_collator.py`.
+### Steps for Data Preparation:
 
+1. **Image Encoding**:  
+   - Use scripts such as `data_process/encode_vq_finevision.py` or `data_process/convert_imagepair_cc512_batch_version.py` to transform image-text pair data into VQGAN encodings.  
+   - These scripts will encode images into discrete token sequences and pair them with corresponding text annotations.
+
+2. **Data Format**:  
+   - Final training data should be stored in `jsonl` format.  
+   - Each line in the file must include text, VQGAN codes, and other metadata.  
+   - For specific details about the expected format, refer to the logic in `uni_arch/train/data_collator.py`.
 ## 🚀 Model Training
 
 The training process is managed through a centralized shell script. You only need to configure the parameters at the top of the script.
@@ -59,32 +93,32 @@ Below is an example script for multi-node, multi-GPU (7 machines, 8 GPUs each) S
 
 ```bash
 #!/bin/bash
-# 脚本将在遇到任何错误时立即退出
+# The script will exit immediately upon encountering any errors
 set -e
 python -c 'import torch; a=torch.rand(2,device="cuda:0")'
 # =================================================================
-# 1. 参数配置 (Parameter Configuration)
-# 在这里修改所有实验参数，清晰明了
+# 1. Parameter Configuration
+# All experiment parameters are modified here for clarity
 # =================================================================
 
-# -- 任务与日志 (Task & Logging) --
+# -- Task & Logging --
 run_name='Qwen2.5'
 output_dir="../ckpts/${run_name}"
 extra_tags="7b_baseline,uni_v4"
 
-# -- 预备命令 (Preliminary Commands) --
+# -- Preliminary Commands --
 echo "--- Checking nvidia-smi ---"
 nvidia-smi
 echo "--- Pulling latest code from git ---"
 git pull
 
-# -- 分布式训练配置 (Distributed Training Config) --
+# -- Distributed Training Config --
 main_port=16799
 main_ip='10.54.107.215'
 hostfile='./host_file7'
 config_file="configs/accel_ds_7machine.yaml"
 
-# -- 模型与数据路径 (Model & Data Paths) --
+# -- Model & Data Paths --
 model_path="../models/Qwen2.5-7B-AddTokens"
 data_path="../mock/datasets/uni_v4/"
 streaming_data=1
@@ -94,7 +128,7 @@ image_folder="./data/"
 shuffle_seed=218
 vq_resolution=512
 
-# -- 模型结构 (Model Architecture) --
+# -- Model Architecture --
 model_version="gemma"
 custom_cls="auto"
 model_spec_module="none"
@@ -105,8 +139,8 @@ unfreeze_keys="train-all"
 ffn_vision_size=0
 ffn_share_size=0
 
-# -- 训练超参数 (Training Hyperparameters) --
-bf16="true" # 使用 "bf16" 或 "fp16" 或 "no"
+# -- Training Hyperparameters --
+bf16="true" # Use "bf16", "fp16", or "no"
 learning_rate=5e-5
 max_steps=200000
 train_batch_size=10
@@ -118,21 +152,21 @@ warmup_ratio=0.05
 lr_scheduler="constant_with_warmup"
 ignore_instruction=1
 
-# -- 保存与评估 (Saving & Evaluation) --
-save_steps=0.1 # 按比例保存，0.1 表示每 10% 保存一次
+# -- Saving & Evaluation --
+save_steps=0.1 # Save at intervals, 0.1 means saving every 10%
 save_total_limit=1
 eval_strategy="no"
 eval_batch_size=10
 logging_steps=10
 
-# -- 性能与其他 (Performance & Others) --
+# -- Performance & Others --
 gradient_checkpointing=1
 dataloader_workers=16
 resume_from_checkpoint=0
 
 # =================================================================
-# 2. 执行命令 (Execute Command)
-# 下面的部分通常不需要修改
+# 2. Execute Command
+# The following section typically doesn't need modification
 # =================================================================
 
 echo "--- Starting Training: ${run_name} ---"
@@ -220,3 +254,28 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 ## Acknowledgement
 
 This project's partial code is based on https://github.com/FoundationVision/Liquid.
+
+## Citation
+```text
+@article{hao2025unixmitigatingmodalityconflict,
+      title={Uni-X: Mitigating Modality Conflict with a Two-End-Separated Architecture for Unified Multimodal Models}, 
+      author={Jitai Hao and Hao Liu and Xinyan Xiao and Qiang Huang and Jun Yu},
+      year={2025},
+      eprint={2509.24365},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      journal={arXiv preprint},
+      url={https://arxiv.org/abs/2509.24365}, 
+}
+
+@article{tang2025ugenunifiedautoregressivemultimodal,
+      title={UGen: Unified Autoregressive Multimodal Model with Progressive Vocabulary Learning}, 
+      author={Hongxuan Tang and Hao Liu and Xinyan Xiao},
+      year={2025},
+      eprint={2503.21193},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      journal={arXiv preprint},
+      url={https://arxiv.org/abs/2503.21193}, 
+}
+```
