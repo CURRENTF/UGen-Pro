@@ -55,80 +55,85 @@ Below is an example script for multi-node, multi-GPU (7 machines, 8 GPUs each) S
 
 ```bash
 #!/bin/bash
-# Exit immediately if a command exits with a non-zero status.
+# 脚本将在遇到任何错误时立即退出
 set -e
+python -c 'import torch; a=torch.rand(2,device="cuda:0")'
 # =================================================================
-# 1. Parameter Configuration
+# 1. 参数配置 (Parameter Configuration)
+# 在这里修改所有实验参数，清晰明了
 # =================================================================
 
-# -- Task & Logging --
-run_name='Qwen2.5-3B-uni-X'
+# -- 任务与日志 (Task & Logging) --
+run_name='Qwen2.5'
 output_dir="../ckpts/${run_name}"
-extra_tags="3B,unix,x12_6,try_sota,big-SFT,ignore_ins,sft_v4_more" # For W&B and path naming
+extra_tags="7b_baseline,uni_v4"
 
-# -- Distributed Training Config --
-main_port=16374
-main_ip='10.54.107.215'         # IP address of the main node
-hostfile='./host_file7'         # DeepSpeed hostfile
-config_file="configs/accel_ds_7machine.yaml" # Accelerate config file
+# -- 预备命令 (Preliminary Commands) --
+echo "--- Checking nvidia-smi ---"
+nvidia-smi
+echo "--- Pulling latest code from git ---"
+git pull
 
-# -- Model & Data Paths --
-model_path="../mock/ckpts/Qwen2.5-3B-uni-X/..." # Path to a pretrained model or checkpoint
-data_path="../datasets/uni_sft_v4"             # Path to the training data
-streaming_data=0                               # Whether to stream data
-data_percentage="1.0"                          # Percentage of data to use
-t2i_ratio=0.5                                  # Ratio for constructing T2I/I2T data
-shuffle_seed=218                               # Seed for dataset shuffling
-vq_resolution=512                              # VQGAN resolution
+# -- 分布式训练配置 (Distributed Training Config) --
+main_port=16799
+main_ip='10.54.107.215'
+hostfile='./host_file7'
+config_file="configs/accel_ds_7machine.yaml"
 
-# -- Model Architecture --
+# -- 模型与数据路径 (Model & Data Paths) --
+model_path="../models/Qwen2.5-7B-AddTokens"
+data_path="../mock/datasets/uni_v4/"
+streaming_data=1
+data_percentage="1.0"
+t2i_ratio=0.6
+image_folder="./data/"
+shuffle_seed=218
+vq_resolution=512
+
+# -- 模型结构 (Model Architecture) --
 model_version="gemma"
-custom_cls="uni_qwen"             # Use custom model class
-model_spec_module="x"             # Specify the Uni-X architecture
-vision_encode_layers=12           # Number of vision encoder layers
-vision_decode_layers=6            # Number of vision decoder layers
+custom_cls="auto"
+model_spec_module="none"
+vision_encode_layers=0
+vision_decode_layers=0
 all_modal_visible=0
-unfreeze_keys="train-all"         # Train all parameters
-ffn_vision_size=4096              # Vision FFN size
-ffn_share_size=4096               # Shared FFN size
+unfreeze_keys="train-all"
+ffn_vision_size=0
+ffn_share_size=0
 
-# -- Training Hyperparameters --
-bf16="true"
-learning_rate=1e-5
-max_steps=10000
-train_batch_size=20
-model_max_length=20480
-use_data_packing=2                # 0:No packing, 1:Pretrain packing, 2:SFT packing
+# -- 训练超参数 (Training Hyperparameters) --
+bf16="true" # 使用 "bf16" 或 "fp16" 或 "no"
+learning_rate=5e-5
+max_steps=200000
+train_batch_size=10
+model_max_length=10240
+use_data_packing=2 # 2 for sft
 grad_accum_steps=1
 weight_decay=0.0
-warmup_ratio=0.1
-lr_scheduler="linear"
-ignore_instruction=1              # Whether to ignore the instruction part when calculating loss
+warmup_ratio=0.05
+lr_scheduler="constant_with_warmup"
+ignore_instruction=1
 
-# -- Saving & Evaluation --
-save_steps=0.05                   # Save checkpoint every 5% of total steps
-save_total_limit=1                # Maximum number of checkpoints to keep
+# -- 保存与评估 (Saving & Evaluation) --
+save_steps=0.1 # 按比例保存，0.1 表示每 10% 保存一次
+save_total_limit=1
 eval_strategy="no"
+eval_batch_size=10
 logging_steps=10
 
-# -- Performance & Others --
+# -- 性能与其他 (Performance & Others) --
 gradient_checkpointing=1
 dataloader_workers=16
-resume_from_checkpoint=0          # Whether to resume from a checkpoint
+resume_from_checkpoint=0
 
 # =================================================================
-# 2. Execute Command (Usually no changes needed below)
+# 2. 执行命令 (Execute Command)
+# 下面的部分通常不需要修改
 # =================================================================
+
 echo "--- Starting Training: ${run_name} ---"
 
-nohup accelerate launch --main_process_port ${main_port} --main_process_ip "${main_ip}" \
---deepspeed_hostfile "${hostfile}" --config_file "${config_file}" \
-uni_arch/train/hf_trainer.py \
---model_name_or_path "${model_path}" \
---data_path "${data_path}" \
---percentage "${data_percentage}" \
-# ... (all other parameters are passed here)
-> train.log 2>&1 &
+nohup accelerate launch --main_process_port ${main_port} --main_process_ip "${main_ip}" --deepspeed_hostfile "${hostfile}" --config_file "${config_file}" liquid/train/hf_trainer.py --model_name_or_path "${model_path}" --data_path "${data_path}" --percentage "${data_percentage}" --shuffleseed ${shuffle_seed} --T2I_ratio ${t2i_ratio} --vq_resolution ${vq_resolution} --image_folder "${image_folder}" --bf16 ${bf16} --output_dir "${output_dir}" --run_name "${run_name}" --model_custom_cls "${custom_cls}" --model_spec_module "${model_spec_module}" --vision_encode_layers ${vision_encode_layers} --vision_decode_layers ${vision_decode_layers} --ffn_vision_size ${ffn_vision_size} --ffn_share_size ${ffn_share_size} --unfreeze_keys "${unfreeze_keys}" --use_data_packing ${use_data_packing} --all_modal_visible ${all_modal_visible} --extra_tags "${extra_tags}" --learning_rate ${learning_rate} --max_steps ${max_steps} --per_device_train_batch_size ${train_batch_size} --per_device_eval_batch_size ${eval_batch_size} --model_max_length ${model_max_length} --gradient_accumulation_steps ${grad_accum_steps} --eval_strategy "${eval_strategy}" --save_strategy "steps" --save_steps ${save_steps} --save_total_limit ${save_total_limit} --weight_decay ${weight_decay} --warmup_ratio ${warmup_ratio} --lr_scheduler_type "${lr_scheduler}" --logging_steps ${logging_steps} --gradient_checkpointing ${gradient_checkpointing} --dataloader_num_workers ${dataloader_workers} --report_to "wandb" --resume_from_checkpoint ${resume_from_checkpoint} --version "${model_version}" --streaming_data ${streaming_data} --accelerator_config '{"dispatch_batches": false}' --ignore_instruction ${ignore_instruction}  > train.log 2>&1 &
 
 echo "--- Training launched in background. Check train.log for output. ---"
 ```
@@ -204,15 +209,6 @@ All logs and results will be saved in the `outputs/` directory.
   * **API Service**: You can run `evaluation/api_server.py` independently to deploy a persistent, OpenAI-compatible API endpoint for easy integration with other applications.
   * **Script-based Inference**: The file `evaluation/uni_infer.py` contains the core text and image generation logic (the `any_modal_chat_api` function) and can be used as a reference for writing custom inference scripts.
 
-## 🛠️ Tools & Analysis
-
-The project includes several useful tools for analysis:
-
-  * `tools/analyze_model_grad.py`: Calculates and visualizes the cosine similarity of gradients between different modalities (text-only vs. multi-modal) during training to analyze the **gradient conflict** problem.
-  * `draw_pics/grad_conflict.py`: Plots the results from the gradient analysis script.
-  * `tools/cal_entropy.py`: Computes the N-gram conditional entropy for different data sources (e.g., English Wikipedia, Chinese Wikipedia, image tokens) to measure data complexity and predictability.
-  * `tools/data_translator.py`: A utility to batch-translate datasets using an API.
-
 ## 📄 License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
@@ -220,18 +216,3 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 ## Acknowledgement
 
 This project's partial code is based on https://github.com/FoundationVision/Liquid.
-
-## Citation
-
-```text
-@article{hao2025unixmitigatingmodalityconflict,
-      title={Uni-X: Mitigating Modality Conflict with a Two-End-Separated Architecture for Unified Multimodal Models}, 
-      author={Jitai Hao and Hao Liu and Xinyan Xiao and Qiang Huang and Jun Yu},
-      year={2025},
-      eprint={2509.24365},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      journal={arXiv preprint},
-      url={https://arxiv.org/abs/2509.24365}, 
-}
-```
