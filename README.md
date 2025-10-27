@@ -1,6 +1,8 @@
-## Model Checkpoints Available at Huggingface!
+## 🎉 Model Checkpoints Available at Huggingface!
 
 **Checkpoints**: https://huggingface.co/JitaiHao/Uni-7B
+
+![performance.png](figures/performance.png)
 
 ## 📂 Project Structure
 
